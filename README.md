@@ -1,8 +1,8 @@
 ## install
 
-### cargo build --release
+### `cargo build --release`
 
-### sudo nano  ~/Library/LaunchAgents/com.github.acsandmann.apple-music-rpc.plist
+### `sudo nano  ~/Library/LaunchAgents/com.github.acsandmann.apple-music-rpc.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -23,6 +23,6 @@
 </plist>
 ```
 
-### launchctl load ~/Library/LaunchAgents/com.github.acsandmann.apple-music-rpc.plist
+### `launchctl load ~/Library/LaunchAgents/com.github.acsandmann.apple-music-rpc.plist`
 
 #### if you are still having issues i recommend `brew install --cask launchcontrol`. it is a launch control gui and whilst it is paid you can surely use the free trial to figure some stuff out.
