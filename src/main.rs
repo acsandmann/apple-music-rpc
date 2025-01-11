@@ -2,7 +2,10 @@ use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::{
+    signal::unix::{signal, SignalKind},
+    time::Duration,
+};
 use url::Url;
 
 mod cache;
@@ -22,14 +25,11 @@ struct App {
 
 impl App {
     pub fn new(client_id: &str, app_name: ITunesAppName) -> Result<Self, MusicError> {
-        let mut client = DiscordIpcClient::new(client_id)
-            .map_err(|e| MusicError::DiscordError(e.to_string()))?;
-        client
-            .connect()
-            .map_err(|e| MusicError::DiscordError(e.to_string()))?;
-
         let mut cache = Cache::new();
         let _ = cache.load_cache();
+
+        let client = DiscordIpcClient::new(client_id)
+            .map_err(|e| MusicError::DiscordError(e.to_string()))?;
 
         Ok(App {
             state: AppState::Idle,
@@ -37,6 +37,20 @@ impl App {
             cache,
             app_name,
         })
+    }
+
+    fn try_reconnect(&mut self, client_id: &str) -> bool {
+        match DiscordIpcClient::new(client_id) {
+            Ok(mut new_client) => match new_client.connect() {
+                Ok(()) => {
+                    println!("Successfully reconnected to Discord!");
+                    self.client = new_client;
+                    true
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
     }
 
     async fn search_album_artwork(
@@ -119,23 +133,26 @@ impl App {
         Ok(AppState::Presence(presence_data))
     }
 
-    async fn handle_state(&mut self) -> Result<(), MusicError> {
+    async fn handle_state(&mut self) -> Result<bool, MusicError> {
         let is_open: bool = execute_script(&self.app_name, SCRIPTS.is_open)?;
 
         if !is_open {
-            self.client
-                .clear_activity()
-                .map_err(|e| MusicError::DiscordError(e.to_string()))?;
+            if let Err(e) = self.client.clear_activity() {
+                eprintln!("Failed to clear activity: {}", e);
+                return Ok(false);
+            }
             self.state = AppState::Idle;
-            return Ok(());
+            return Ok(true);
         }
 
-        match &self.update_presence().await? {
+        match self.update_presence().await? {
             AppState::Idle => {
-                self.client
-                    .clear_activity()
-                    .map_err(|e| MusicError::DiscordError(e.to_string()))?;
+                if let Err(e) = self.client.clear_activity() {
+                    eprintln!("Failed to clear activity: {}", e);
+                    return Ok(false);
+                }
                 self.state = AppState::Idle;
+                Ok(true)
             }
             AppState::Presence(data) => {
                 let mut activity_builder = activity::Activity::new()
@@ -163,19 +180,21 @@ impl App {
                         .buttons(vec![activity::Button::new("Listen on Apple Music", url)]);
                 }
 
-                self.client
-                    .set_activity(activity_builder)
-                    .map_err(|e| MusicError::DiscordError(e.to_string()))?;
-                self.state = AppState::Presence(data.clone());
+                match self.client.set_activity(activity_builder) {
+                    Ok(_) => {
+                        self.state = AppState::Presence(data);
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to set activity: {}", e);
+                        Ok(false)
+                    }
+                }
             }
         }
-
-        Ok(())
     }
 
     pub async fn run(&mut self) -> Result<(), MusicError> {
-        println!("Connected to Discord!");
-
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
 
@@ -195,17 +214,44 @@ impl App {
             }
         });
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let client_id = DISCORD_CLIENT_ID.to_string();
+        let mut connected = false;
 
         while running.load(Ordering::SeqCst) {
-            interval.tick().await;
+            if !connected {
+                if self.try_reconnect(&client_id) {
+                    connected = true;
+                    println!("Connected to Discord!");
+                } else {
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    continue;
+                }
+            }
 
-            if let Err(e) = self.handle_state().await {
-                eprintln!("Error: {}", e);
+            match self.handle_state().await {
+                Ok(true) => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Ok(false) => {
+                    println!(
+                        "Lost connection to Discord, attempting to reconnect in 15 seconds..."
+                    );
+                    connected = false;
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
             }
         }
 
-        self.cache.flush().unwrap();
+        if let Err(e) = self.cache.flush() {
+            eprintln!("Failed to flush cache: {}", e);
+        } else {
+            println!("Cache flushed, shutting down gracefully.");
+        };
+
         println!("Cache flushed, shutting down gracefully.");
 
         Ok(())

@@ -10,10 +10,14 @@ pub fn get_macos_version() -> f32 {
         .expect("Failed to get macOS version");
 
     let version = String::from_utf8_lossy(&output.stdout);
-    match version.split('.').next().and_then(|v| v.parse().ok()) {
-        Some(10) => MAC_OS_CATALINA,
-        Some(n) if n >= 11 => MAC_OS_CATALINA,
-        _ => 10.0,
+
+    let parts: Vec<&str> = version.trim().split('.').collect();
+
+    if parts.len() >= 2 {
+        let version_str = format!("{}.{}", parts[0], parts[1]);
+        version_str.parse::<f32>().unwrap_or(MAC_OS_CATALINA)
+    } else {
+        MAC_OS_CATALINA
     }
 }
 

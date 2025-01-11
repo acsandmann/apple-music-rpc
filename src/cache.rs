@@ -63,7 +63,8 @@ mod timestamp_serde {
 fn cache_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .and_then(|h| if h.is_empty() { None } else { Some(h) })
-        .map(PathBuf::from).map(|h| h.join("Library/Caches"))
+        .map(PathBuf::from)
+        .map(|h| h.join("Library/Caches"))
 }
 
 impl Cache {
